@@ -1,0 +1,125 @@
+# Model Compression Pipeline Configuration
+# Target model: InternVL3.5-1B (InternViT-300M + Qwen3-0.6B backbone)
+# Hardware: RTX 5060 8GB VRAM — 1B model fits entirely in GPU (~2GB bf16)
+#
+# LLM config: hidden_size=1024, intermediate_size=3072, num_heads=16, num_kv_heads=8, layers=28
+
+model:
+  name: "C:/Projects/visual-llm-finance/models/InternVL3_5-1B"
+  dtype: "bfloat16"
+  device_map: "auto"
+
+# ─── Phase 1: SVD Profiling ───────────────────────────────────────────────────
+svd:
+  # Layers to profile (regex patterns matched against module names)
+  # InternVL: LLM layers are at language_model.model.layers.N.<submodule>
+  # Qwen3 backbone: self_attn.{q,k,v,o}_proj and mlp.{gate,up,down}_proj
+  # Only profile LLM backbone layers (NOT vision encoder layers).
+  # InternVL3.5-1B LLM layers are at: language_model.model.layers.N.<submodule>
+  # Vision encoder layers (InternViT) use different MLP naming (fc1/fc2) and
+  # should NOT be profiled — they add 96 extra modules and are not pruned.
+  target_layers:
+    - "language_model\\.model\\.layers\\.\\d+\\.self_attn\\.q_proj"
+    - "language_model\\.model\\.layers\\.\\d+\\.self_attn\\.k_proj"
+    - "language_model\\.model\\.layers\\.\\d+\\.self_attn\\.v_proj"
+    - "language_model\\.model\\.layers\\.\\d+\\.self_attn\\.o_proj"
+    - "language_model\\.model\\.layers\\.\\d+\\.mlp\\.gate_proj"
+    - "language_model\\.model\\.layers\\.\\d+\\.mlp\\.up_proj"
+    - "language_model\\.model\\.layers\\.\\d+\\.mlp\\.down_proj"
+  # Standard SVD settings
+  standard:
+    rank_ratio: 0.5          # Fraction of singular values to keep for profiling
+    min_rank: 8              # Minimum rank to keep
+  # TNrSVD (fast randomized) settings  — arXiv:1707.07803
+  tnrsvd:
+    enabled: true
+    k: 64                    # Number of singular triplets to compute (k/2 rank approx)
+    q: 2                     # Power iteration refinement steps
+    tol: 1.0e-6              # MPO-rounding tolerance
+    adaptive: true           # Use qTNrSVD adaptive variant when true
+    rel_error_tol: 1.0e-4    # Target relative error for adaptive variant
+  output_dir: "outputs/svd_profiles"
+
+# ─── Phase 2: Width Pruning (Tensor Network Activation Analysis) ───────────────
+width_pruning:
+  calibration:
+    num_samples: 512         # 1B model can handle more samples in 8GB VRAM
+    seq_len: 512
+    dataset: "c4"
+    dataset_split: "train"
+  # Dimensions to prune
+  targets:
+    hidden_size: true        # Prune embedding/hidden dimension (1024 → ~768)
+    intermediate_size: true  # Prune MLP intermediate dimension (3072 → ~2000)
+    num_heads: true          # Prune attention heads (16 → 12)
+  # Importance scoring (Minitron-style activation magnitude)
+  importance:
+    method: "activation_magnitude"
+    aggregation_batch: "l2"
+    aggregation_seq: "mean"
+  # Pruning ratios (fraction of neurons/channels to REMOVE)
+  pruning_ratios:
+    hidden_size: 0.25        # Remove 25% of hidden dim (1024 → 768)
+    intermediate_size: 0.35  # Remove 35% of MLP intermediate dim (3072 → ~2000)
+    num_heads: 0.25          # Remove 25% of attention heads (16 → 12)
+  output_dir: "outputs/width_pruning"
+
+# ─── Phase 3: Depth Pruning (Sliding Window Layer Removal) ─────────────────────
+depth_pruning:
+  calibration:
+    num_samples: 256
+    seq_len: 512
+    dataset: "c4"
+    dataset_split: "validation"
+  # Sliding window configuration
+  sliding_window:
+    min_size: 2              # Minimum window size (layers to remove at once)
+    max_size: 5              # Maximum window size
+    stride: 1
+    loss_threshold: 0.15     # Max acceptable relative loss increase
+  # Target: remove approximately this many layers (28 → ~24-25)
+  target_layer_removal: 3
+  always_prune: true
+  output_dir: "outputs/depth_pruning"
+
+# ─── Phase 4: Recovery (Fine-tuning / Distillation) ───────────────────────────
+recovery:
+  method: "distillation"     # "distillation" | "finetuning" | "both"
+  dataset: "c4"
+  dataset_split: "train"
+  max_samples: 20000         # 1B model trains faster, can afford more samples
+  seq_len: 512              # Reduced from 1024 to fit in 8GB VRAM during distillation
+  distillation:
+    temperature: 1.0
+    alpha: 1.0
+    teacher_model: null      # null = use original model as teacher
+  training:
+    output_dir: "outputs/recovery"
+    num_epochs: 1
+    per_device_train_batch_size: 1   # Minimal: teacher int4 + student bf16 + optim8bit on 8GB
+    gradient_accumulation_steps: 16  # effective batch = 16
+    learning_rate: 1.0e-4
+    lr_scheduler: "cosine"
+    warmup_ratio: 0.01
+    weight_decay: 0.01
+    max_grad_norm: 1.0
+    bf16: true
+    logging_steps: 50
+    save_steps: 500
+    eval_steps: 500
+    dataloader_num_workers: 4
+
+# ─── Evaluation ───────────────────────────────────────────────────────────────
+evaluation:
+  dataset: "wikitext"
+  dataset_split: "test"
+  num_samples: 256
+  seq_len: 512
+  max_batches: 128
+  output_dir: "outputs/evaluation"
+
+# ─── Output ───────────────────────────────────────────────────────────────────
+output:
+  base_dir: "outputs"
+  compressed_model_dir: "outputs/compressed_model"
+  save_intermediate: true    # 1B model checkpoints are small (~2GB each)

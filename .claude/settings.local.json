@@ -1,0 +1,27 @@
+{
+  "permissions": {
+    "allow": [
+      "WebFetch(domain:arxiv.org)",
+      "WebFetch(domain:dspace.mit.edu)",
+      "WebFetch(domain:deepai.org)",
+      "WebFetch(domain:github.com)",
+      "Bash(pip show:*)",
+      "Bash(python -c:*)",
+      "Bash(dir /b \"C:\\\\Projects\\\\model-compression\\\\outputs\")",
+      "Bash(dir /b \"C:\\\\Projects\\\\model-compression\\\\outputs\\\\after_depth_pruning\")",
+      "Bash(python scripts/run_benchmarks.py:*)",
+      "Bash(C:Projectsenv_py311Scriptspython.exe C:Projectsmodel-compressionscriptsrun_benchmarks.py --num-samples 200)",
+      "Bash(cmd /c:*)",
+      "Bash(powershell.exe -Command \"Set-Location ''C:\\\\Projects\\\\model-compression''; & ''C:\\\\Projects\\\\env_py311\\\\Scripts\\\\python.exe'' scripts\\\\run_benchmarks.py --num-samples 200 2>&1\")",
+      "Bash(findstr:*)",
+      "Bash(where:*)",
+      "Bash(conda env:*)",
+      "Bash(dir:*)",
+      "Bash(C:/Users/alvaro/AppData/Local/Programs/Python/Python311/python.exe -c \"import torch; print\\(torch.__version__\\)\")",
+      "Bash(C:/Users/alvaro/AppData/Local/Programs/Python/Python311/Scripts/pip.exe list:*)",
+      "Bash(C:/Users/alvaro/AppData/Local/Programs/Python/Python314/Scripts/pip.exe list:*)",
+      "Bash(powershell.exe -Command:*)",
+      "Bash(C:/Projects/env_py311/Scripts/python.exe:*)"
+    ]
+  }
+}
